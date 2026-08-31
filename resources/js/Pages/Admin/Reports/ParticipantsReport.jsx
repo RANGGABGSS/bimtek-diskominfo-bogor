@@ -1,0 +1,825 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import AppLayout from '@/Layouts/AppLayout';
+import { Head, router } from '@inertiajs/react';
+import { 
+  Printer, 
+  Plus, 
+  Trash2, 
+  FileSpreadsheet, 
+  Download, 
+  Save, 
+  RotateCcw, 
+  Check, 
+  FileText,
+  Bold,
+  Italic,
+  Underline,
+  AlignLeft,
+  AlignCenter,
+  AlignRight
+} from 'lucide-react';
+import html2pdf from 'html2pdf.js';
+import { useParticipantRealtime } from '@/Hooks/useParticipantRealtime';
+import LiveConnectionBadge from '@/Components/LiveConnectionBadge';
+import RealtimeToast from '@/Components/RealtimeToast';
+
+export default function ParticipantsReport({ events = [], selectedEventId, currentEvent, template }) {
+  // Built-in Presets for Quick Selection
+  const PRESETS = [
+    {
+      id: 'pesona_bimtek',
+      name: 'Format Standar Bimbingan Teknis (Hotel Pesona Anggraini)',
+      report_title: currentEvent ? `DAFTAR HADIR ${currentEvent.title.toUpperCase()}` : 'DAFTAR HADIR BIMBINGAN TEKNIS',
+      program_code_name: '2.16.03 - Program Pengelolaan Aplikasi Informatika',
+      kegiatan_code_name: '2.16.03.2.02 - Pengelolaan E-Government',
+      sub_kegiatan_code_name: '2.16.03.2.02.0035 - Koordinasi dan Fasilitasi SPBE',
+      acara: currentEvent?.title || 'Bimbingan Teknis Literasi Digital dan SPBE',
+      tanggal: currentEvent?.start_date ? new Date(currentEvent.start_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }) : '11 Agustus 2026',
+      tempat: currentEvent?.location || 'Hotel New Pesona Anggraini Cisarua, Bogor',
+      col_school_label: 'Instansi / Asal Sekolah',
+      col_district_label: 'Kecamatan / Wilayah',
+    },
+    {
+      id: 'spbe_cyber',
+      name: 'Format Standar Diskominfo (Auditorium Diskominfo)',
+      report_title: 'DAFTAR HADIR BIMBINGAN TEKNIS TATA KELOLA SPBE & KEAMANAN INFORMASI',
+      program_code_name: '2.16.01 - Program Penyelenggaraan SPBE Terintegrasi',
+      kegiatan_code_name: '2.16.01.2.01 - Peningkatan Kesiapsiagaan Tim Tanggap Insiden Siber (CSIRT)',
+      sub_kegiatan_code_name: '2.16.01.2.01.0012 - Implementasi Standar Keamanan Informasi Kedinasan',
+      acara: 'Bimbingan Teknis Tata Kelola SPBE & Keamanan Informasi',
+      tanggal: '18 Agustus 2026',
+      tempat: 'Auditorium Diskominfo Kabupaten Bogor',
+      col_school_label: 'Instansi / SKPD',
+      col_district_label: 'Bidang / Unit Kerja',
+    }
+  ];
+
+  // Saved Config from Template
+  const savedHeader = template?.header_config || {};
+
+  // Header State
+  const [headerConfig, setHeaderConfig] = useState({
+    report_title: savedHeader.report_title || (currentEvent ? `DAFTAR HADIR ${currentEvent.title.toUpperCase()}` : PRESETS[0].report_title),
+    program_code_name: savedHeader.program_code_name || PRESETS[0].program_code_name,
+    kegiatan_code_name: savedHeader.kegiatan_code_name || PRESETS[0].kegiatan_code_name,
+    sub_kegiatan_code_name: savedHeader.sub_kegiatan_code_name || PRESETS[0].sub_kegiatan_code_name,
+    acara: savedHeader.acara || currentEvent?.title || PRESETS[0].acara,
+    tanggal: savedHeader.tanggal || (currentEvent?.start_date ? new Date(currentEvent.start_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }) : PRESETS[0].tanggal),
+    tempat: savedHeader.tempat || currentEvent?.location || PRESETS[0].tempat,
+    col_school_label: savedHeader.col_school_label || PRESETS[0].col_school_label,
+    col_district_label: savedHeader.col_district_label || PRESETS[0].col_district_label,
+    signee_nama: savedHeader.signee_nama || template?.signee_nama || 'DINI SAUMI IMANIAH, SS, MM',
+    signee_nip: savedHeader.signee_nip || template?.signee_nip || '19750927 199803 2 009',
+    signee_jabatan: savedHeader.signee_jabatan || template?.signee_jabatan || 'PEJABAT PELAKSANA TEKNIS KEGIATAN',
+    signee_substansi: savedHeader.signee_substansi || 'SUBSTANSI PENGEMBANGAN SUMBER DAYA DAN TEKNOLOGI INFORMATIKA',
+    signee_location_date: savedHeader.signee_location_date || `Cibinong, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`,
+  });
+
+  const [paperSize, setPaperSize] = useState('A4');
+  const [fontSize, setFontSize] = useState('11pt');
+  const [isEditable, setIsEditable] = useState(true);
+
+  const buildInitialRows = (ev) => {
+    if (savedHeader.custom_rows && Array.isArray(savedHeader.custom_rows) && savedHeader.custom_rows.length > 0) {
+      return savedHeader.custom_rows;
+    }
+
+    if (ev?.registrations && ev.registrations.length > 0) {
+      const filtered = ev.registrations.filter(reg => reg.user?.role !== 'admin');
+      if (filtered.length > 0) {
+        return filtered.map((reg, idx) => ({
+          id: reg.id || idx + 1,
+          no: idx + 1,
+          name: reg.user?.name || 'Peserta BIMTEK',
+          school: reg.user?.participant_profile?.instansi || reg.user?.instansi || 'SDN Cibinong 01',
+          district: reg.user?.participant_profile?.no_hp ? `Kec. ${reg.user?.participant_profile?.jabatan || 'Cibinong'}` : (reg.user?.jabatan || 'Kec. Cibinong'),
+          isNew: false
+        }));
+      }
+    }
+
+    return [
+      { id: 1, no: 1, name: 'IRZI', school: 'UMUM', district: 'KEC. CIBINONG', isNew: false },
+      { id: 2, no: 2, name: 'RANGGA BAGAS SETIAWAN', school: 'UMUM', district: 'KEC. CIBINONG', isNew: false },
+      { id: 3, no: 3, name: 'UDIN', school: 'UMUM', district: 'KEC. CIBINONG', isNew: false },
+    ];
+  };
+
+  const [tableRows, setTableRows] = useState(() => buildInitialRows(currentEvent));
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
+
+  useEffect(() => {
+    setTableRows(buildInitialRows(currentEvent));
+    setHasUnsavedChanges(false);
+  }, [currentEvent, template]);
+
+  const handleNewParticipant = useCallback((eventData) => {
+    if (Number(eventData.bimtek_id) === Number(selectedEventId)) {
+      setTableRows((prev) => {
+        const exists = prev.some((row) => row.name === eventData.participant_name);
+        if (exists) return prev;
+
+        const newRow = {
+          id: eventData.id || Date.now(),
+          no: prev.length + 1,
+          name: eventData.participant_name,
+          school: eventData.instansi || 'Umum',
+          district: eventData.jabatan || 'Kec. Cibinong',
+          isNew: true,
+        };
+
+        return [...prev, newRow];
+      });
+      setHasUnsavedChanges(true);
+    }
+  }, [selectedEventId]);
+
+  const { isConnected, latestNotification, clearNotification } = useParticipantRealtime({
+    bimtekId: selectedEventId,
+    onParticipantRegistered: handleNewParticipant,
+  });
+
+  const handleSelectEvent = (id) => {
+    window.location.href = `/admin/reports/participants?event_id=${id}`;
+  };
+
+  const handleSaveAllToDatabase = (e) => {
+    if (e) e.preventDefault();
+    setIsSaving(true);
+
+    const templateCode = `DAFTAR_HADIR_EVENT_${selectedEventId}`;
+
+    router.post('/admin/reports/header-config', {
+      template_code: templateCode,
+      ...headerConfig,
+      custom_rows: tableRows
+    }, {
+      preserveState: true,
+      onSuccess: () => {
+        setIsSaving(false);
+        setHasUnsavedChanges(false);
+        setSaveSuccessNotice(true);
+        setTimeout(() => setSaveSuccessNotice(false), 4000);
+      },
+      onError: () => {
+        setIsSaving(false);
+      }
+    });
+  };
+
+  const handleHeaderFieldChange = (field, value) => {
+    setHeaderConfig(prev => ({ ...prev, [field]: value }));
+    setHasUnsavedChanges(true);
+  };
+
+  const handleResetHeader = () => {
+    if (confirm('Apakah Anda ingin me-reset format header dan data peserta ke bawaan kegiatan?')) {
+      setHeaderConfig({
+        ...headerConfig,
+        ...PRESETS[0]
+      });
+      setTableRows(buildInitialRows(currentEvent));
+      setHasUnsavedChanges(true);
+    }
+  };
+
+  const handleCellChange = (id, field, value) => {
+    setTableRows(prev => prev.map(row => row.id === id ? { ...row, [field]: value } : row));
+    setHasUnsavedChanges(true);
+  };
+
+  const handleAddNewRow = () => {
+    const newNo = tableRows.length + 1;
+    const newRow = {
+      id: Date.now(),
+      no: newNo,
+      name: 'NAMA PESERTA BARU',
+      school: 'UMUM',
+      district: 'KEC. CIBINONG',
+      isNew: true
+    };
+    setTableRows([...tableRows, newRow]);
+    setHasUnsavedChanges(true);
+  };
+
+  const handleDeleteRow = (id) => {
+    if (confirm('Hapus baris peserta ini dari daftar hadir?')) {
+      const updated = tableRows.filter(r => r.id !== id).map((r, i) => ({ ...r, no: i + 1 }));
+      setTableRows(updated);
+      setHasUnsavedChanges(true);
+    }
+  };
+
+  const applyFormat = (command, value = null) => {
+    document.execCommand(command, false, value);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const handleExportPdf = () => {
+    const element = document.getElementById('attendance-official-sheet');
+    if (!element) return;
+
+    const opt = {
+      margin:       [10, 12, 10, 12],
+      filename:     `Daftar_Hadir_${headerConfig.acara.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true, letterRendering: true },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: paperSize === 'A4_LANDSCAPE' ? 'landscape' : 'portrait' },
+      pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+    };
+    html2pdf().set(opt).from(element).save();
+  };
+
+  return (
+    <AppLayout title="Daftar Hadir Resmi Kegiatan">
+      <Head title="Format Daftar Hadir Resmi - SIM-BIMTEK" />
+
+      {/* PRINT & GOOGLE DOCS LIVE EDITING CSS */}
+      <style>{`
+        [contenteditable="true"] {
+          outline: none !important;
+          transition: background-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        [contenteditable="true"]:hover {
+          background-color: rgba(59, 130, 246, 0.08) !important;
+          border-radius: 2px !important;
+          cursor: text;
+        }
+        [contenteditable="true"]:focus {
+          outline: none !important;
+          background-color: #ffffff !important;
+          box-shadow: inset 0 0 0 2px #2563eb, 0 0 0 3px rgba(37, 99, 235, 0.25) !important;
+          border-radius: 3px !important;
+        }
+        @media print {
+          [contenteditable="true"]:focus, [contenteditable="true"]:hover {
+            background-color: transparent !important;
+            box-shadow: none !important;
+            outline: none !important;
+          }
+          @page {
+            size: ${paperSize === 'A4_LANDSCAPE' ? 'A4 landscape' : 'A4 portrait'};
+            margin: 10mm 12mm 10mm 12mm;
+          }
+          html, body {
+            background: #ffffff !important;
+            color: #000000 !important;
+            font-family: "Times New Roman", Times, serif !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .print\\:hidden, nav, header, footer, aside, #mobile-bottom-nav {
+            display: none !important;
+          }
+          main {
+            padding: 0 !important;
+            margin: 0 !important;
+            width: 100% !important;
+            max-width: none !important;
+          }
+          #attendance-official-sheet {
+            box-shadow: none !important;
+            border: none !important;
+            padding: 0 !important;
+            margin: 0 auto !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            min-height: auto !important;
+            background: #ffffff !important;
+            font-family: "Times New Roman", Times, serif !important;
+          }
+          table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+          }
+          tr {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
+          .break-inside-avoid {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
+        }
+      `}</style>
+
+      {/* REAL-TIME NOTIFICATION TOAST */}
+      <RealtimeToast notification={latestNotification} onClose={clearNotification} />
+
+      <div className="space-y-5 pb-24 font-sans">
+        
+        {/* WORD RIBBON TOOLBAR & CONTROLS (PRINT:HIDDEN) */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4 print:hidden">
+          
+          {/* TOP BAR */}
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-blue-900 text-white text-[11px] font-bold uppercase tracking-wider">
+                  <FileText className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Format Laporan Resmi (Times New Roman)</span>
+                </div>
+                <LiveConnectionBadge isConnected={isConnected} />
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[11px] font-bold border border-emerald-200">
+                  ● 100% Live Editable (Ketik Langsung)
+                </span>
+              </div>
+              <h1 className="text-xl font-bold text-slate-900">
+                Formulir & Rekapitulasi Daftar Hadir Peserta
+              </h1>
+              <p className="text-xs text-slate-500">
+                Format standar laporan kedinasan resmi dengan font Times New Roman. Seluruh judul, informasi kegiatan, tabel presensi, dan tanda tangan PPTK dapat diklik dan diedit langsung.
+              </p>
+            </div>
+
+            {/* ACTION BUTTONS */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleSaveAllToDatabase}
+                disabled={isSaving}
+                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5 transition-transform active:scale-95 cursor-pointer"
+                title="Simpan Perubahan ke Database"
+              >
+                <Save className="w-4 h-4 text-amber-300" />
+                <span>{isSaving ? 'Menyimpan...' : 'Simpan ke DB'}</span>
+              </button>
+
+              <a
+                href={`/admin/reports/attendance/excel?event_id=${selectedEventId}&type=all`}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl border border-slate-300 flex items-center gap-1.5 shadow-xs transition-transform active:scale-95"
+                title="Ekspor Data ke Microsoft Excel"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <span>Unduh Excel</span>
+              </a>
+
+              <button
+                onClick={handlePrint}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl border border-slate-300 flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
+                title="Cetak Lembar Dokumen"
+              >
+                <Printer className="w-4 h-4 text-slate-600" />
+                <span>Cetak Lembar</span>
+              </button>
+
+              <button
+                onClick={handleExportPdf}
+                className="px-4 py-2 bg-blue-900 hover:bg-blue-950 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5 transition-transform active:scale-95 cursor-pointer"
+                title="Unduh sebagai PDF A4"
+              >
+                <Download className="w-4 h-4 text-amber-400" />
+                <span>Unduh PDF</span>
+              </button>
+            </div>
+          </div>
+
+          {/* SELECTORS */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+            {/* EVENT SELECTOR */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Pilih Kegiatan BIMTEK:
+              </label>
+              <select
+                value={selectedEventId}
+                onChange={(e) => handleSelectEvent(e.target.value)}
+                className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 outline-none focus:border-blue-900 focus:bg-white"
+              >
+                {events.map((ev) => (
+                  <option key={ev.id} value={ev.id}>{ev.title}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* PRESET FORMAT SELECTOR */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Preset Format Dokumen:
+              </label>
+              <select
+                onChange={(e) => {
+                  const p = PRESETS.find(pr => pr.id === e.target.value);
+                  if (p) {
+                    setHeaderConfig(prev => ({ ...prev, ...p }));
+                    setHasUnsavedChanges(true);
+                  }
+                }}
+                className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 outline-none focus:border-blue-900 focus:bg-white"
+              >
+                <option value="">-- Terapkan Preset Standar --</option>
+                {PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* PAPER SIZE */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Ukuran & Tata Letak Kertas:
+              </label>
+              <div className="flex items-center gap-1.5 bg-slate-50 p-1 border border-slate-300 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setPaperSize('A4')}
+                  className={`flex-1 py-1 text-center text-xs font-bold rounded-lg transition-colors ${
+                    paperSize === 'A4' ? 'bg-blue-900 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  A4 Potret
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaperSize('A4_LANDSCAPE')}
+                  className={`flex-1 py-1 text-center text-xs font-bold rounded-lg transition-colors ${
+                    paperSize === 'A4_LANDSCAPE' ? 'bg-blue-900 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  A4 Lanskap
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaperSize('F4')}
+                  className={`flex-1 py-1 text-center text-xs font-bold rounded-lg transition-colors ${
+                    paperSize === 'F4' ? 'bg-blue-900 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  F4/Folio
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* WORD FORMATTING RIBBON */}
+          <div className="bg-slate-100/90 border border-slate-300/80 p-2 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-1">
+              <span className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800">
+                Times New Roman (Standar Resmi)
+              </span>
+
+              <select
+                value={fontSize}
+                onChange={(e) => setFontSize(e.target.value)}
+                className="p-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 outline-none"
+              >
+                <option value="10pt">10 pt</option>
+                <option value="11pt">11 pt (Standar)</option>
+                <option value="12pt">12 pt</option>
+                <option value="14pt">14 pt</option>
+              </select>
+
+              <div className="h-5 w-px bg-slate-300 mx-1"></div>
+
+              <button
+                type="button"
+                onClick={() => applyFormat('bold')}
+                className="p-1.5 bg-white hover:bg-slate-200 border border-slate-300 rounded-lg font-black text-slate-800"
+                title="Tebal (Bold)"
+              >
+                <Bold className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('italic')}
+                className="p-1.5 bg-white hover:bg-slate-200 border border-slate-300 rounded-lg italic text-slate-800"
+                title="Miring (Italic)"
+              >
+                <Italic className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('underline')}
+                className="p-1.5 bg-white hover:bg-slate-200 border border-slate-300 rounded-lg underline text-slate-800"
+                title="Garis Bawah (Underline)"
+              >
+                <Underline className="w-3.5 h-3.5" />
+              </button>
+
+              <div className="h-5 w-px bg-slate-300 mx-1"></div>
+
+              <button
+                type="button"
+                onClick={() => applyFormat('justifyLeft')}
+                className="p-1.5 bg-white hover:bg-slate-200 border border-slate-300 rounded-lg text-slate-800"
+                title="Rata Kiri"
+              >
+                <AlignLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('justifyCenter')}
+                className="p-1.5 bg-white hover:bg-slate-200 border border-slate-300 rounded-lg text-slate-800"
+                title="Rata Tengah"
+              >
+                <AlignCenter className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => applyFormat('justifyRight')}
+                className="p-1.5 bg-white hover:bg-slate-200 border border-slate-300 rounded-lg text-slate-800"
+                title="Rata Kanan"
+              >
+                <AlignRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* TABLE CONTROLS */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleAddNewRow}
+                className="px-2.5 py-1.5 bg-blue-900 hover:bg-blue-950 text-white font-bold rounded-lg flex items-center gap-1 shadow-xs cursor-pointer"
+                title="Tambah Baris Peserta ke Tabel"
+              >
+                <Plus className="w-3.5 h-3.5 text-amber-400" />
+                <span>+ Baris Peserta</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (tableRows.length > 1) {
+                    setTableRows(tableRows.slice(0, -1));
+                    setHasUnsavedChanges(true);
+                  }
+                }}
+                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold border border-rose-300 rounded-lg flex items-center gap-1 cursor-pointer"
+                title="Hapus Baris Terakhir"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>- Baris</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetHeader}
+                className="p-1.5 bg-white hover:bg-slate-200 border border-slate-300 rounded-lg text-slate-700 cursor-pointer"
+                title="Reset Data ke Bawaan Kegiatan"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* SUCCESS NOTIFICATION TOAST */}
+        {saveSuccessNotice && (
+          <div className="p-4 bg-emerald-500 text-white rounded-xl shadow-lg flex items-center justify-between font-bold text-xs animate-bounce print:hidden">
+            <div className="flex items-center gap-2">
+              <Check className="w-5 h-5 text-amber-300" />
+              <span>✓ Perubahan format laporan daftar hadir berhasil disimpan permanen ke database!</span>
+            </div>
+            <button onClick={() => setSaveSuccessNotice(false)} className="text-white hover:text-slate-200">✕</button>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* CLEAN REPORT WORKSPACE (STANDARD A4 GOVERNMENT DOCUMENT SHEET)             */}
+        {/* ========================================================================= */}
+        <div className="bg-slate-200/90 p-4 sm:p-8 md:p-10 rounded-2xl flex justify-center overflow-x-auto print:bg-transparent print:p-0 print:border-none print:shadow-none">
+          
+          {/* THE PHYSICAL WHITE A4 PAPER SHEET WITH TIMES NEW ROMAN */}
+          <div 
+            id="attendance-official-sheet"
+            className={`bg-white text-black transition-all mx-auto ${
+              paperSize === 'A4_LANDSCAPE' 
+                ? 'w-full max-w-5xl min-h-[210mm] p-8 sm:p-12' 
+                : paperSize === 'F4'
+                ? 'w-full max-w-3xl min-h-[330mm] p-8 sm:p-12'
+                : 'w-full max-w-3xl min-h-[297mm] p-8 sm:p-12'
+            } shadow-lg border border-slate-300 print:shadow-none print:border-none print:p-0 print:m-0`}
+            style={{ fontFamily: '"Times New Roman", Times, serif', fontSize: fontSize }}
+          >
+            
+            {/* 1. DOCUMENT TITLE */}
+            <div className="text-center space-y-1 mb-6">
+              <h1 
+                className="text-base sm:text-lg font-bold uppercase tracking-wide text-black"
+                contentEditable={isEditable}
+                suppressContentEditableWarning
+                onBlur={(e) => handleHeaderFieldChange('report_title', e.target.innerText)}
+              >
+                {headerConfig.report_title || 'DAFTAR HADIR PESERTA BIMBINGAN TEKNIS'}
+              </h1>
+              <h2 
+                className="text-sm font-bold uppercase text-black"
+                contentEditable={isEditable}
+                suppressContentEditableWarning
+              >
+                TAHUN ANGGARAN 2026
+              </h2>
+            </div>
+
+            {/* 2. METADATA KEY-VALUE (CLEAN UNBORDERED ALIGNMENT WITHOUT TABLE TAGS) */}
+            <div className="mb-6 text-[10.5pt] text-black space-y-1">
+              <div className="flex items-start">
+                <span className="w-36 font-bold shrink-0">Program</span>
+                <span className="w-4 text-center font-bold shrink-0">:</span>
+                <span 
+                  className="font-normal text-black"
+                  contentEditable={isEditable}
+                  suppressContentEditableWarning
+                  onBlur={(e) => handleHeaderFieldChange('program_code_name', e.target.innerText)}
+                >
+                  {headerConfig.program_code_name}
+                </span>
+              </div>
+              <div className="flex items-start">
+                <span className="w-36 font-bold shrink-0">Kegiatan</span>
+                <span className="w-4 text-center font-bold shrink-0">:</span>
+                <span 
+                  className="font-normal text-black"
+                  contentEditable={isEditable}
+                  suppressContentEditableWarning
+                  onBlur={(e) => handleHeaderFieldChange('kegiatan_code_name', e.target.innerText)}
+                >
+                  {headerConfig.kegiatan_code_name}
+                </span>
+              </div>
+              <div className="flex items-start">
+                <span className="w-36 font-bold shrink-0">Sub Kegiatan</span>
+                <span className="w-4 text-center font-bold shrink-0">:</span>
+                <span 
+                  className="font-normal text-black"
+                  contentEditable={isEditable}
+                  suppressContentEditableWarning
+                  onBlur={(e) => handleHeaderFieldChange('sub_kegiatan_code_name', e.target.innerText)}
+                >
+                  {headerConfig.sub_kegiatan_code_name}
+                </span>
+              </div>
+              <div className="flex items-start">
+                <span className="w-36 font-bold shrink-0">Acara</span>
+                <span className="w-4 text-center font-bold shrink-0">:</span>
+                <span 
+                  className="font-bold text-black"
+                  contentEditable={isEditable}
+                  suppressContentEditableWarning
+                  onBlur={(e) => handleHeaderFieldChange('acara', e.target.innerText)}
+                >
+                  {headerConfig.acara}
+                </span>
+              </div>
+              <div className="flex items-start">
+                <span className="w-36 font-bold shrink-0">Hari / Tanggal</span>
+                <span className="w-4 text-center font-bold shrink-0">:</span>
+                <span 
+                  className="font-normal text-black"
+                  contentEditable={isEditable}
+                  suppressContentEditableWarning
+                  onBlur={(e) => handleHeaderFieldChange('tanggal', e.target.innerText)}
+                >
+                  {headerConfig.tanggal}
+                </span>
+              </div>
+              <div className="flex items-start">
+                <span className="w-36 font-bold shrink-0">Tempat</span>
+                <span className="w-4 text-center font-bold shrink-0">:</span>
+                <span 
+                  className="font-normal text-black"
+                  contentEditable={isEditable}
+                  suppressContentEditableWarning
+                  onBlur={(e) => handleHeaderFieldChange('tempat', e.target.innerText)}
+                >
+                  {headerConfig.tempat}
+                </span>
+              </div>
+            </div>
+
+            {/* 3. STANDARD REPORT TABLE (1PX BLACK BORDERS) */}
+            <div className="mb-8 overflow-x-auto">
+              <table className="w-full border-collapse border border-black text-[10pt]">
+                <thead>
+                  <tr className="bg-slate-100/90 text-black">
+                    <th className="border border-black px-2.5 py-2 text-center font-bold w-12">NO</th>
+                    <th className="border border-black px-3 py-2 text-left font-bold">NAMA PESERTA</th>
+                    <th className="border border-black px-3 py-2 text-left font-bold w-48">{headerConfig.col_school_label || 'ASAL SEKOLAH / INSTANSI'}</th>
+                    <th className="border border-black px-3 py-2 text-left font-bold w-40">{headerConfig.col_district_label || 'KECAMATAN / WILAYAH'}</th>
+                    <th className="border border-black px-3 py-2 text-center font-bold w-52">TANDA TANGAN</th>
+                    <th className="border border-black px-2 py-2 text-center font-bold w-12 print:hidden">AKSI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableRows.map((row, idx) => {
+                    const rowNumber = row.no || idx + 1;
+                    const isOdd = rowNumber % 2 !== 0;
+
+                    return (
+                      <tr key={row.id || idx} className="hover:bg-slate-50/50">
+                        <td 
+                          className="border border-black px-2.5 py-2.5 text-center font-normal"
+                          contentEditable={isEditable}
+                          suppressContentEditableWarning
+                          onBlur={(e) => handleCellChange(row.id, 'no', e.target.innerText)}
+                        >
+                          {rowNumber}
+                        </td>
+                        <td 
+                          className="border border-black px-3 py-2.5 font-bold uppercase text-black"
+                          contentEditable={isEditable}
+                          suppressContentEditableWarning
+                          onBlur={(e) => handleCellChange(row.id, 'name', e.target.innerText)}
+                        >
+                          {row.name}
+                        </td>
+                        <td 
+                          className="border border-black px-3 py-2.5 font-normal uppercase text-black"
+                          contentEditable={isEditable}
+                          suppressContentEditableWarning
+                          onBlur={(e) => handleCellChange(row.id, 'school', e.target.innerText)}
+                        >
+                          {row.school}
+                        </td>
+                        <td 
+                          className="border border-black px-3 py-2.5 font-normal uppercase text-black"
+                          contentEditable={isEditable}
+                          suppressContentEditableWarning
+                          onBlur={(e) => handleCellChange(row.id, 'district', e.target.innerText)}
+                        >
+                          {row.district}
+                        </td>
+                        <td className="border border-black px-3 py-2.5 align-middle text-[10pt]">
+                          {isOdd ? (
+                            <div className="flex items-center justify-between w-full pr-4">
+                              <span className="font-normal text-black">{rowNumber}.</span>
+                              <span className="text-slate-400 select-none">................................</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between w-full pl-6">
+                              <span className="text-slate-400 select-none">................................</span>
+                              <span className="font-normal text-black">{rowNumber}.</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="border border-black p-1 text-center align-middle print:hidden">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRow(row.id)}
+                            className="p-1 text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                            title="Hapus baris ini"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* 4. OFFICIAL PPTK SIGNATURE (RIGHT-ALIGNED, NATURAL FLOW WITH ZERO OVERLAP) */}
+            <div className="flex justify-end pt-8 pb-4 break-inside-avoid text-[10.5pt] text-black">
+              <div className="text-center min-w-[320px] max-w-[400px]">
+                <div className="space-y-0.5 mb-20">
+                  <p 
+                    className="font-bold text-black uppercase"
+                    contentEditable={isEditable}
+                    suppressContentEditableWarning
+                    onBlur={(e) => handleHeaderFieldChange('signee_jabatan', e.target.innerText)}
+                  >
+                    {headerConfig.signee_jabatan || 'PEJABAT PELAKSANA TEKNIS KEGIATAN'}
+                  </p>
+                  <p 
+                    className="font-bold text-black uppercase text-[10pt] leading-snug"
+                    contentEditable={isEditable}
+                    suppressContentEditableWarning
+                    onBlur={(e) => handleHeaderFieldChange('signee_substansi', e.target.innerText)}
+                  >
+                    {headerConfig.signee_substansi || 'SUBSTANSI PENGEMBANGAN SUMBER DAYA DAN TEKNOLOGI INFORMATIKA'}
+                  </p>
+                </div>
+
+                <div className="space-y-0.5">
+                  <p 
+                    className="font-bold underline text-[11pt] text-black uppercase"
+                    contentEditable={isEditable}
+                    suppressContentEditableWarning
+                    onBlur={(e) => handleHeaderFieldChange('signee_nama', e.target.innerText)}
+                  >
+                    {headerConfig.signee_nama || 'DINI SAUMI IMANIAH, SS, MM'}
+                  </p>
+                  <p 
+                    className="text-[10pt] text-black"
+                    contentEditable={isEditable}
+                    suppressContentEditableWarning
+                    onBlur={(e) => handleHeaderFieldChange('signee_nip', e.target.innerText)}
+                  >
+                    NIP. {headerConfig.signee_nip || '19750927 199803 2 009'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </AppLayout>
+  );
+}
