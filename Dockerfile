@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-dev \
     libzip-dev \
     curl \
-    && docker-php-ext-install pdo_sqlite zip \
+    && docker-php-ext-install pdo_mysql pdo_sqlite zip \ \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
